@@ -5,6 +5,9 @@ on:
     branches:
       - main
 
+# This comment is to force a new workflow run
+jobs:
+... 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
