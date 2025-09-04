@@ -12,12 +12,13 @@ const cloudinary = require('cloudinary').v2;
 const nodemailer = require('nodemailer');
 const sgTransport = require('nodemailer-sendgrid-transport');
 const mongoose = require('mongoose');
+const path = require('path'); // Added for serving static files
 const connectDB = require('./db');
 
 const app = express();
 connectDB();
 
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 8000; // Changed port to 8000
 const JWT_SECRET = process.env.JWT_SECRET || "super-secret-key-change-this";
 
 const server = http.createServer(app);
@@ -95,10 +96,10 @@ const options = { auth: { api_key: process.env.SENDGRID_API_KEY } };
 const transporter = nodemailer.createTransport(sgTransport(options));
 
 cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET,
-  secure: true
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET,
+    secure: true
 });
 const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });
@@ -107,14 +108,14 @@ app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
 const authenticateToken = (req, res, next) => {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
-  if (token == null) return res.sendStatus(401);
-  jwt.verify(token, JWT_SECRET, (err, user) => {
-    if (err) return res.sendStatus(403);
-    req.user = user;
-    next();
-  });
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+    if (token == null) return res.sendStatus(401);
+    jwt.verify(token, JWT_SECRET, (err, user) => {
+        if (err) return res.sendStatus(403);
+        req.user = user;
+        next();
+    });
 };
 
 const sendEmail = async (to, subject, html) => {
@@ -132,33 +133,33 @@ const sendEmail = async (to, subject, html) => {
 };
 
 wss.on('connection', (ws) => {
-  ws.on('message', async (message) => {
-    try {
-      const data = JSON.parse(message);
-      if (data.type === 'auth' && data.token) {
-        jwt.verify(data.token, JWT_SECRET, (err, user) => {
-          if (!err) {
-            ws.userId = user.userId;
-            ws.conversationId = data.conversationId;
-          } else {
-            ws.close();
-          }
-        });
-      }
-      else if (data.type === 'message' && ws.userId) {
-        const { conversation_id, content } = data.payload;
-        const newMessage = new Message({ conversation_id, sender_id: ws.userId, content });
-        await newMessage.save();
-        wss.clients.forEach(client => {
-          if (client !== ws && client.readyState === ws.OPEN && client.conversationId === conversation_id) {
-            client.send(JSON.stringify({ type: 'newMessage', payload: newMessage }));
-          }
-        });
-      }
-    } catch (error) {
-      console.error('WebSocket error:', error);
-    }
-  });
+    ws.on('message', async (message) => {
+        try {
+            const data = JSON.parse(message);
+            if (data.type === 'auth' && data.token) {
+                jwt.verify(data.token, JWT_SECRET, (err, user) => {
+                    if (!err) {
+                        ws.userId = user.userId;
+                        ws.conversationId = data.conversationId;
+                    } else {
+                        ws.close();
+                    }
+                });
+            }
+            else if (data.type === 'message' && ws.userId) {
+                const { conversation_id, content } = data.payload;
+                const newMessage = new Message({ conversation_id, sender_id: ws.userId, content });
+                await newMessage.save();
+                wss.clients.forEach(client => {
+                    if (client !== ws && client.readyState === ws.OPEN && client.conversationId === conversation_id) {
+                        client.send(JSON.stringify({ type: 'newMessage', payload: newMessage }));
+                    }
+                });
+            }
+        } catch (error) {
+            console.error('WebSocket error:', error);
+        }
+    });
 });
 
 // --- REST API Routes ---
@@ -420,7 +421,19 @@ app.get('/api/dashboard/stats', authenticateToken, async (req, res) => {
     }
 });
 
-server.listen(PORT, () => {
-  console.log(`Backend server with WebSocket running on http://localhost:${PORT}`);
+// --- New Code to Serve Frontend ---
+
+// Serve static files from the 'public' directory
+// The Dockerfile will copy the React build files into this 'public' directory.
+app.use(express.static(path.join(__dirname, 'public')));
+
+// For any other request, serve the main HTML file of the React app
+app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+// --- End of New Code ---
+
+server.listen(PORT, () => {
+    console.log(`Backend server with WebSocket running on http://localhost:${PORT}`);
+});

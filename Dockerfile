@@ -1,35 +1,43 @@
-# --- Stage 1: The Builder ---
-# This stage installs dependencies and builds our application
-FROM node:18-alpine AS builder
+# Stage 1: Build the React Frontend
+FROM node:18-alpine AS frontend-builder
 
-# Set the working directory inside the container
 WORKDIR /app
 
-# Copy package.json and package-lock.json first to leverage Docker's layer caching
-COPY package*.json ./
+# Copy the frontend package files
+COPY ./housing-hub-frontend/package.json ./
+COPY ./housing-hub-frontend/package-lock.json ./
 
-# Install all project dependencies
+# Install frontend dependencies
 RUN npm install
 
-# Copy the rest of your application's source code
-COPY . .
+# Copy all frontend source files
+COPY ./housing-hub-frontend/ ./
 
+# Build the React app for production
+RUN npm run build
 
-# --- Stage 2: The Production Image ---
-# This stage creates the final, lightweight image for production
-FROM node:18-alpine
+# ---
+# Stage 2: Build the Node.js Backend and serve the Frontend
+FROM node:18-alpine AS final-image
 
-# Set the working directory
+# Set working directory for the backend
 WORKDIR /app
 
-# Copy only the necessary installed dependencies from the 'builder' stage
-COPY --from=builder /app/node_modules ./node_modules
+# Copy the backend package files
+COPY ./housing-hub-backend/package.json ./
+COPY ./housing-hub-backend/package-lock.json ./
 
-# Copy the application code from the 'builder' stage
-COPY --from=builder /app .
+# Install backend dependencies
+RUN npm install
 
-# Expose the port that your server runs on
-EXPOSE 3001
+# Copy the built frontend from the previous stage
+COPY --from=frontend-builder /app/build ./public
 
-# The command to run your application when the container starts
-CMD ["node", "server.js"]
+# Copy the backend source code
+COPY ./housing-hub-backend/ ./
+
+# Expose the port the app runs on
+EXPOSE 8000
+
+# Start the application
+CMD [ "node", "server.js" ]
