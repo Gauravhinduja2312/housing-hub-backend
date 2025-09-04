@@ -20,10 +20,10 @@ jobs:
       - name: Build and Push Backend Docker Image
         uses: docker/build-push-action@v4
         with:
-          context: ./housing-hub-backend
+          context: ./housing-hub-backend1
           push: true
-          tags: ${{ secrets.DOCKER_USERNAME }}/housing-hub-backend:latest
-          file: ./housing-hub-backend/Dockerfile
+          tags: ${{ secrets.DOCKER_USERNAME }}/housing-hub-backend1:latest
+          file: ./housing-hub-backend1/Dockerfile
 
       - name: Deploy to Server (Placeholder)
         run: |
