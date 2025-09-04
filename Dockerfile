@@ -3,36 +3,26 @@ FROM node:18-alpine AS frontend-builder
 
 WORKDIR /app
 
-# Copy the frontend package files
-COPY package.json ./
+# Copy all project files to the container
+COPY . .
 
-# Install frontend dependencies
+# Install dependencies and build the app
 RUN npm install
-
-# Copy all frontend source files
-COPY . ./
-
-# Build the React app for production
 RUN npm run build
 
 # ---
 # Stage 2: Build the Node.js Backend and serve the Frontend
 FROM node:18-alpine AS final-image
 
-# Set working directory for the backend
+# Copy all project files from the root of the repo
 WORKDIR /app
-
-# Copy the backend package files
-COPY package.json ./
-
-# Install backend dependencies
-RUN npm install
+COPY . .
 
 # Copy the built frontend from the previous stage
 COPY --from=frontend-builder /app/build ./public
 
-# Copy the backend source code
-COPY . ./
+# Install backend dependencies
+RUN npm install
 
 # Expose the port the app runs on
 EXPOSE 8000
