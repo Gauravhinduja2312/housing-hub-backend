@@ -17,9 +17,9 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_TOKEN }}
 
-      - name: Build and Push Backend Docker Image
-        uses: docker/build-push-action@v4
-        with:
+      -  name: Build and Push Backend Docker Image
+         uses: docker/build-push-action@v4
+         with:
           context: ./housing-hub-backend1
           push: true
           tags: ${{ secrets.DOCKER_USERNAME }}/housing-hub-backend:latest
