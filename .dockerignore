@@ -1,0 +1,12 @@
+# Ignore Node.js dependencies (they will be installed inside the container)
+node_modules
+
+# Ignore the environment variables file (this is injected at runtime, not built into the image)
+.env
+
+# Ignore Git version control files
+.git
+.gitignore
+
+# Ignore the Dockerfile itself
+Dockerfile
