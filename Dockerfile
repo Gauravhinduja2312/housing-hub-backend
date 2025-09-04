@@ -4,14 +4,13 @@ FROM node:18-alpine AS frontend-builder
 WORKDIR /app
 
 # Copy the frontend package files
-COPY ./housing-hub-frontend/package.json ./
-COPY ./housing-hub-frontend/package-lock.json ./
+COPY package.json ./
 
 # Install frontend dependencies
 RUN npm install
 
 # Copy all frontend source files
-COPY ./housing-hub-frontend/ ./
+COPY . ./
 
 # Build the React app for production
 RUN npm run build
@@ -24,8 +23,7 @@ FROM node:18-alpine AS final-image
 WORKDIR /app
 
 # Copy the backend package files
-COPY ./housing-hub-backend/package.json ./
-COPY ./housing-hub-backend/package-lock.json ./
+COPY package.json ./
 
 # Install backend dependencies
 RUN npm install
@@ -34,7 +32,7 @@ RUN npm install
 COPY --from=frontend-builder /app/build ./public
 
 # Copy the backend source code
-COPY ./housing-hub-backend/ ./
+COPY . ./
 
 # Expose the port the app runs on
 EXPOSE 8000
