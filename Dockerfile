@@ -1,41 +1,35 @@
-# Stage 1: Build the React Frontend
-FROM node:18-alpine AS frontend-builder
+# --- Stage 1: The Builder ---
+# This stage installs dependencies and builds our application
+FROM node:18-alpine AS builder
 
+# Set the working directory inside the container
 WORKDIR /app
 
-# Copy the frontend package files
-COPY package.json ./
+# Copy package.json and package-lock.json first to leverage Docker's layer caching
+COPY package*.json ./
 
-# Install frontend dependencies
+# Install all project dependencies
 RUN npm install
 
-# Copy all frontend source files
+# Copy the rest of your application's source code
 COPY . .
 
-# Build the React app for production
-RUN npm run build
 
-# ---
-# Stage 2: Build the Node.js Backend and serve the Frontend
-FROM node:18-alpine AS final-image
+# --- Stage 2: The Production Image ---
+# This stage creates the final, lightweight image for production
+FROM node:18-alpine
 
-# Set working directory for the backend
+# Set the working directory
 WORKDIR /app
 
-# Copy the backend package files
-COPY package.json ./
+# Copy only the necessary installed dependencies from the 'builder' stage
+COPY --from=builder /app/node_modules ./node_modules
 
-# Install backend dependencies
-RUN npm install
+# Copy the application code from the 'builder' stage
+COPY --from=builder /app .
 
-# Copy the built frontend from the previous stage
-COPY --from=frontend-builder /app/build ./public
+# Expose the port that your server runs on
+EXPOSE 3001
 
-# Copy the backend source code
-COPY . .
-
-# Expose the port the app runs on
-EXPOSE 8000
-
-# Start the application
-CMD [ "node", "server.js" ]
+# The command to run your application when the container starts
+CMD ["node", "server.js"]
