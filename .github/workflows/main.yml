@@ -24,7 +24,7 @@ jobs:
         with:
           context: .
           push: true
-          tags: ${{ secrets.DOCKER_USERNAME }}/housing-hub-backend1:latest
+          tags: ${{ secrets.DOCKER_USERNAME }}/housing-hub-backend:latest
           file: ./Dockerfile
 
       - name: Deploy to Server (Placeholder)
