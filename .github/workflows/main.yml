@@ -8,7 +8,7 @@ on:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-    # This comment is to force a new workflow run
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
@@ -20,12 +20,12 @@ jobs:
           password: ${{ secrets.DOCKER_TOKEN }}
 
       - name: Build and Push Backend Docker Image
-    uses: docker/build-push-action@v4
-    with:
-      context: .
-      push: true
-      tags: ${{ secrets.DOCKER_USERNAME }}/housing-hub-backend:latest
-      file: ./Dockerfile
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: true
+          tags: ${{ secrets.DOCKER_USERNAME }}/housing-hub-backend:latest
+          file: ./Dockerfile
 
       - name: Deploy to Server (Placeholder)
         run: |
