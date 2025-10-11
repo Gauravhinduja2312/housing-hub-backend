@@ -1,0 +1,48 @@
+# housing-hub-fullstack/docker-compose.yml
+
+version: '3.8'
+
+services:
+  # Backend Node.js Service
+  backend:
+    build:
+      context: ./housing-hub-backend1
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./housing-hub-backend1:/app
+      - /app/node_modules
+    env_file:
+      - ./housing-hub-backend1/.env
+    depends_on:
+      - mongo
+      - name: Log in to Docker Hub
+  uses: docker/login-action@v2
+  with:
+    username: ${{ secrets.DOCKERHUB_USERNAME }}
+    password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+  # Frontend React Service
+  frontend:
+    build:
+      context: ./housing-hub-project
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./housing-hub-project:/app
+      - /app/node_modules
+    stdin_open: true
+    tty: true
+    depends_on:
+      - backend
+
+  # Database Service
+  mongo:
+    image: 'mongo:latest'
+    ports:
+      - '27017:27017'
+    volumes:
+      - mongo-data:/data/db
+
+volumes:
+  mongo-data:
