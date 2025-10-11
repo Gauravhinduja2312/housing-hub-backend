@@ -143,9 +143,7 @@ wss.on('connection', (ws) => {
             ws.userId = user.userId;
             ws.userType = user.userType; // Store userType for chatbot logic
             ws.conversationId = data.conversationId;
-            console.log(`WebSocket Authenticated: User ${ws.userId}, Type: ${ws.userType}`); // DEBUG
           } else {
-            console.log("WebSocket Auth Failed"); // DEBUG
             ws.close();
           }
         });
@@ -165,7 +163,6 @@ wss.on('connection', (ws) => {
         });
 
         // --- Chatbot Logic ---
-        console.log(`Processing message from user type: ${ws.userType}`); // DEBUG
         if (ws.userType === 'student') {
           const conversation = await Conversation.findById(conversation_id);
           if (!conversation) return;
@@ -174,7 +171,6 @@ wss.on('connection', (ws) => {
           let botReply = null;
 
           const lowerCaseContent = content.toLowerCase();
-          console.log(`Checking message content: "${lowerCaseContent}"`); // DEBUG
 
           if (lowerCaseContent.includes('available') || lowerCaseContent.includes('still have this')) {
             botReply = "Hello! Yes, this property is still available. Feel free to ask any other questions you may have.";
@@ -182,10 +178,17 @@ wss.on('connection', (ws) => {
             botReply = "You can reach the landlord by replying to this message. For urgent matters, their contact number is 555-123-4567.";
           } else if (lowerCaseContent.includes('help') || lowerCaseContent.includes('support')) {
             botReply = "This is an automated message. The landlord will get back to you shortly. If you have questions about availability or contact info, please ask directly.";
+          
+          // --- NEW EXAMPLES ---
+          } else if (lowerCaseContent.includes('price') || lowerCaseContent.includes('rent')) {
+            botReply = "The price is listed on the property details page. For specific questions about payment, the landlord will get back to you soon.";
+          } else if (lowerCaseContent.includes('amenities') || lowerCaseContent.includes('wifi') || lowerCaseContent.includes('parking')) {
+            botReply = "You can find a full list of amenities on the property details page. The landlord will respond shortly with any specific details.";
           }
+          // --- END OF NEW EXAMPLES ---
+
 
           if (botReply) {
-            console.log("Chatbot triggered. Preparing reply..."); // DEBUG
             // Simulate a "typing" delay for the bot
             setTimeout(async () => {
               const botMessage = new Message({
@@ -201,10 +204,7 @@ wss.on('connection', (ws) => {
                   client.send(JSON.stringify({ type: 'newMessage', payload: botMessage }));
                 }
               });
-              console.log("Chatbot reply sent."); // DEBUG
             }, 1500); // 1.5-second delay
-          } else {
-            console.log("No chatbot keywords matched."); // DEBUG
           }
         }
       }
@@ -217,6 +217,7 @@ wss.on('connection', (ws) => {
 
 
 // --- REST API Routes ---
+// (The rest of your API routes remain unchanged)
 app.post('/api/signup', async (req, res) => {
     const { email, password, userType } = req.body;
     try {
@@ -480,5 +481,3 @@ app.get('/api/dashboard/stats', authenticateToken, async (req, res) => {
 server.listen(PORT, () => {
   console.log(`Backend server with WebSocket running on http://localhost:${PORT}`);
 });
-
-
