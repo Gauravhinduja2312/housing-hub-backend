@@ -143,7 +143,9 @@ wss.on('connection', (ws) => {
             ws.userId = user.userId;
             ws.userType = user.userType; // Store userType for chatbot logic
             ws.conversationId = data.conversationId;
+            console.log(`WebSocket Authenticated: User ${ws.userId}, Type: ${ws.userType}`); // DEBUG
           } else {
+            console.log("WebSocket Auth Failed"); // DEBUG
             ws.close();
           }
         });
@@ -163,7 +165,7 @@ wss.on('connection', (ws) => {
         });
 
         // --- Chatbot Logic ---
-        // If the message is from a student, check for keywords and send an automated reply.
+        console.log(`Processing message from user type: ${ws.userType}`); // DEBUG
         if (ws.userType === 'student') {
           const conversation = await Conversation.findById(conversation_id);
           if (!conversation) return;
@@ -172,6 +174,7 @@ wss.on('connection', (ws) => {
           let botReply = null;
 
           const lowerCaseContent = content.toLowerCase();
+          console.log(`Checking message content: "${lowerCaseContent}"`); // DEBUG
 
           if (lowerCaseContent.includes('available') || lowerCaseContent.includes('still have this')) {
             botReply = "Hello! Yes, this property is still available. Feel free to ask any other questions you may have.";
@@ -182,6 +185,7 @@ wss.on('connection', (ws) => {
           }
 
           if (botReply) {
+            console.log("Chatbot triggered. Preparing reply..."); // DEBUG
             // Simulate a "typing" delay for the bot
             setTimeout(async () => {
               const botMessage = new Message({
@@ -197,7 +201,10 @@ wss.on('connection', (ws) => {
                   client.send(JSON.stringify({ type: 'newMessage', payload: botMessage }));
                 }
               });
+              console.log("Chatbot reply sent."); // DEBUG
             }, 1500); // 1.5-second delay
+          } else {
+            console.log("No chatbot keywords matched."); // DEBUG
           }
         }
       }
@@ -473,3 +480,5 @@ app.get('/api/dashboard/stats', authenticateToken, async (req, res) => {
 server.listen(PORT, () => {
   console.log(`Backend server with WebSocket running on http://localhost:${PORT}`);
 });
+
+
