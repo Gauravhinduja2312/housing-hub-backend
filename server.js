@@ -9,8 +9,6 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const multer = require('multer');
 const cloudinary = require('cloudinary').v2;
-const nodemailer = require('nodemailer');
-const sgTransport = require('nodemailer-sendgrid-transport');
 const mongoose = require('mongoose');
 const connectDB = require('./db');
 
@@ -22,8 +20,6 @@ const JWT_SECRET = process.env.JWT_SECRET || "super-secret-key-change-this";
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
-
-// REMOVED: const otpStore = {};
 
 // --- Mongoose Schemas ---
 const UserSchema = new mongoose.Schema({
@@ -43,8 +39,8 @@ const PropertySchema = new mongoose.Schema({
     bedrooms: Number,
     bathrooms: Number,
     amenities: String,
-    image_url: String, // Main display image
-    images: [String],  // Gallery images
+    image_url: String,
+    images: [String],
     floor_plan_url: String,
     virtual_tour_url: String,
     lat: Number,
@@ -91,9 +87,6 @@ const Message = mongoose.model('Message', MessageSchema);
 const PropertyView = mongoose.model('PropertyView', PropertyViewSchema);
 
 // --- Middleware & Config ---
-const options = { auth: { api_key: process.env.SENDGRID_API_KEY } };
-const transporter = nodemailer.createTransport(sgTransport(options));
-
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
@@ -192,8 +185,7 @@ wss.on('connection', (ws) => {
 
 
 // --- REST API Routes ---
-
-// UPDATED /api/signup ROUTE
+// UPDATED SIGNUP ROUTE (NO OTP)
 app.post('/api/signup', async (req, res) => {
     const { email, password, userType } = req.body;
     try {
@@ -201,38 +193,26 @@ app.post('/api/signup', async (req, res) => {
         if (existingUser) {
             return res.status(409).json({ message: 'Email already registered.' });
         }
-
         const hashedPassword = await bcrypt.hash(password, 10);
-        
         const newUser = new User({
             email,
             password: hashedPassword,
-            user_type: userType
+            user_type: userType,
         });
-        
         await newUser.save();
-
-        const token = jwt.sign(
-            { userId: newUser._id, email: newUser.email, userType: newUser.user_type },
-            JWT_SECRET,
-            { expiresIn: "1h" }
-        );
-
+        const token = jwt.sign({ userId: newUser._id, email: newUser.email, userType: newUser.user_type }, JWT_SECRET, { expiresIn: '1h' });
         res.status(201).json({
             message: 'User registered successfully!',
             token,
             email: newUser.email,
             userId: newUser._id,
-            userType: newUser.user_type
+            userType: newUser.user_type,
         });
-
     } catch (error) {
-        console.error('Signup Error:', error);
+        console.error('Error during signup:', error);
         res.status(500).json({ message: 'Server error during signup.' });
     }
 });
-
-// REMOVED /api/verify-otp ROUTE
 
 app.post("/api/login", async (req, res) => {
     const { email, password } = req.body;
@@ -248,8 +228,7 @@ app.post("/api/login", async (req, res) => {
     }
 });
 
-// --- Other API Routes (unchanged) ---
-
+// Other API routes follow...
 app.get('/api/properties', async (req, res) => {
     try {
         const properties = await Property.find({}).sort({ createdAt: -1 });
@@ -458,7 +437,6 @@ app.get('/api/dashboard/stats', authenticateToken, async (req, res) => {
         res.status(500).json({ message: 'Server error fetching dashboard stats.' });
     }
 });
-
 
 server.listen(PORT, () => {
   console.log(`Backend server with WebSocket running on http://localhost:${PORT}`);
