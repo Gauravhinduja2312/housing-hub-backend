@@ -21,7 +21,7 @@ const JWT_SECRET = process.env.JWT_SECRET || "super-secret-key-change-this";
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
-// --- Mongoose Schemas (unchanged) ---
+// --- Mongoose Schemas ---
 const UserSchema = new mongoose.Schema({
     email: { type: String, required: true, unique: true, lowercase: true },
     password: { type: String, required: true },
@@ -77,7 +77,7 @@ const PropertyViewSchema = new mongoose.Schema({
     property_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Property', required: true },
 }, { timestamps: true });
 
-// --- Mongoose Models (unchanged) ---
+// --- Mongoose Models ---
 const User = mongoose.model('User', UserSchema);
 const Property = mongoose.model('Property', PropertySchema);
 const Review = mongoose.model('Review', ReviewSchema);
@@ -86,7 +86,7 @@ const Conversation = mongoose.model('Conversation', ConversationSchema);
 const Message = mongoose.model('Message', MessageSchema);
 const PropertyView = mongoose.model('PropertyView', PropertyViewSchema);
 
-// --- Middleware & Config (unchanged) ---
+// --- Middleware & Config ---
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
@@ -185,6 +185,7 @@ wss.on('connection', (ws) => {
 
 
 // --- REST API Routes ---
+// UPDATED SIGNUP ROUTE (NO OTP)
 app.post('/api/signup', async (req, res) => {
     const { email, password, userType } = req.body;
     try {
@@ -309,31 +310,6 @@ app.delete('/api/properties/:id', authenticateToken, async (req, res) => {
         res.status(500).json({ message: 'Server error deleting property.' });
     }
 });
-
-// --- NEW ADMIN DELETE ROUTE ---
-// This route can be used to delete any property by its ID, bypassing the ownership check.
-// In a real application, you would protect this with an admin-only authentication middleware.
-app.delete('/api/properties/:id/admin-delete', async (req, res) => {
-    const { id } = req.params;
-    try {
-        const property = await Property.findById(id);
-        if (!property) {
-            return res.status(404).json({ message: 'Property not found.' });
-        }
-        
-        // Delete the property and all associated data
-        await Property.findByIdAndDelete(id);
-        await Review.deleteMany({ property_id: id });
-        await Favorite.deleteMany({ property_id: id });
-        
-        console.log(`Admin deleted property ${id}`);
-        res.json({ message: 'Property deleted successfully by admin.' });
-    } catch (error) {
-        console.error(`Admin delete error for property ${id}:`, error);
-        res.status(500).json({ message: 'Server error during admin deletion.' });
-    }
-});
-
 
 app.get('/api/conversations', authenticateToken, async (req, res) => {
     const userId = req.user.userId;
@@ -465,4 +441,3 @@ app.get('/api/dashboard/stats', authenticateToken, async (req, res) => {
 server.listen(PORT, () => {
   console.log(`Backend server with WebSocket running on http://localhost:${PORT}`);
 });
-
