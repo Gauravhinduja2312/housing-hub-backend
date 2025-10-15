@@ -97,11 +97,10 @@ const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });
 
 // --- UPDATED CORS CONFIGURATION ---
-const corsOptions = {
-    origin: 'http://localhost:3000', // Allow only your frontend to connect
-    optionsSuccessStatus: 200 
-};
-app.use(cors(corsOptions));
+// This allows requests from any origin. For production, you should restrict this
+// to your specific frontend domain for better security.
+// Example: app.use(cors({ origin: 'https://your-deployed-frontend.com' }));
+app.use(cors());
 
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
@@ -488,3 +487,4 @@ app.get('/api/dashboard/stats', authenticateToken, async (req, res) => {
 server.listen(PORT, () => {
   console.log(`Backend server with WebSocket running on http://localhost:${PORT}`);
 });
+
