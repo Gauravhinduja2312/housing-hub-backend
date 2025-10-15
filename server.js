@@ -9,6 +9,8 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const multer = require('multer');
 const cloudinary = require('cloudinary').v2;
+const nodemailer = require('nodemailer');
+const sgTransport = require('nodemailer-sendgrid-transport');
 const mongoose = require('mongoose');
 const connectDB = require('./db');
 
@@ -21,7 +23,9 @@ const JWT_SECRET = process.env.JWT_SECRET || "super-secret-key-change-this";
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
-// --- Mongoose Schemas (unchanged) ---
+// REMOVED: const otpStore = {};
+
+// --- Mongoose Schemas ---
 const UserSchema = new mongoose.Schema({
     email: { type: String, required: true, unique: true, lowercase: true },
     password: { type: String, required: true },
@@ -39,8 +43,8 @@ const PropertySchema = new mongoose.Schema({
     bedrooms: Number,
     bathrooms: Number,
     amenities: String,
-    image_url: String,
-    images: [String],
+    image_url: String, // Main display image
+    images: [String],  // Gallery images
     floor_plan_url: String,
     virtual_tour_url: String,
     lat: Number,
@@ -62,7 +66,7 @@ const FavoriteSchema = new mongoose.Schema({
 FavoriteSchema.index({ user_id: 1, property_id: 1 }, { unique: true });
 
 const ConversationSchema = new mongoose.Schema({
-    property_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Property' },
+    property_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Property', required: true },
     student_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     landlord_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
 }, { timestamps: true });
@@ -77,7 +81,7 @@ const PropertyViewSchema = new mongoose.Schema({
     property_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Property', required: true },
 }, { timestamps: true });
 
-// --- Mongoose Models (unchanged) ---
+// --- Mongoose Models ---
 const User = mongoose.model('User', UserSchema);
 const Property = mongoose.model('Property', PropertySchema);
 const Review = mongoose.model('Review', ReviewSchema);
@@ -87,6 +91,9 @@ const Message = mongoose.model('Message', MessageSchema);
 const PropertyView = mongoose.model('PropertyView', PropertyViewSchema);
 
 // --- Middleware & Config ---
+const options = { auth: { api_key: process.env.SENDGRID_API_KEY } };
+const transporter = nodemailer.createTransport(sgTransport(options));
+
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
@@ -95,13 +102,7 @@ cloudinary.config({
 });
 const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });
-
-// --- UPDATED CORS CONFIGURATION ---
-// This allows requests from any origin. For production, you should restrict this
-// to your specific frontend domain for better security.
-// Example: app.use(cors({ origin: 'https://your-deployed-frontend.com' }));
 app.use(cors());
-
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
@@ -190,7 +191,9 @@ wss.on('connection', (ws) => {
 });
 
 
-// --- REST API Routes (unchanged) ---
+// --- REST API Routes ---
+
+// UPDATED /api/signup ROUTE
 app.post('/api/signup', async (req, res) => {
     const { email, password, userType } = req.body;
     try {
@@ -198,26 +201,38 @@ app.post('/api/signup', async (req, res) => {
         if (existingUser) {
             return res.status(409).json({ message: 'Email already registered.' });
         }
+
         const hashedPassword = await bcrypt.hash(password, 10);
+        
         const newUser = new User({
             email,
             password: hashedPassword,
-            user_type: userType,
+            user_type: userType
         });
+        
         await newUser.save();
-        const token = jwt.sign({ userId: newUser._id, email: newUser.email, userType: newUser.user_type }, JWT_SECRET, { expiresIn: '1h' });
+
+        const token = jwt.sign(
+            { userId: newUser._id, email: newUser.email, userType: newUser.user_type },
+            JWT_SECRET,
+            { expiresIn: "1h" }
+        );
+
         res.status(201).json({
             message: 'User registered successfully!',
             token,
             email: newUser.email,
             userId: newUser._id,
-            userType: newUser.user_type,
+            userType: newUser.user_type
         });
+
     } catch (error) {
-        console.error('Error during signup:', error);
+        console.error('Signup Error:', error);
         res.status(500).json({ message: 'Server error during signup.' });
     }
 });
+
+// REMOVED /api/verify-otp ROUTE
 
 app.post("/api/login", async (req, res) => {
     const { email, password } = req.body;
@@ -233,6 +248,7 @@ app.post("/api/login", async (req, res) => {
     }
 });
 
+// --- Other API Routes (unchanged) ---
 
 app.get('/api/properties', async (req, res) => {
     try {
@@ -300,7 +316,6 @@ app.put('/api/properties/:id', authenticateToken, upload.array('images', 5), asy
     }
 });
 
-
 app.delete('/api/properties/:id', authenticateToken, async (req, res) => {
     const { id } = req.params;
     try {
@@ -308,66 +323,26 @@ app.delete('/api/properties/:id', authenticateToken, async (req, res) => {
         if (!property || property.landlord_id.toString() !== req.user.userId) {
             return res.status(403).json({ message: 'Unauthorized.' });
         }
-        
-        const conversations = await Conversation.find({ property_id: id });
-        const conversationIds = conversations.map(c => c._id);
-
-        await Message.deleteMany({ conversation_id: { $in: conversationIds } });
-        await Conversation.deleteMany({ property_id: id });
+        await Property.findByIdAndDelete(id);
         await Review.deleteMany({ property_id: id });
         await Favorite.deleteMany({ property_id: id });
-        await Property.findByIdAndDelete(id);
-
-        res.json({ message: 'Property and all associated data deleted successfully.' });
+        res.json({ message: 'Property deleted successfully.' });
     } catch (error) {
         res.status(500).json({ message: 'Server error deleting property.' });
     }
 });
 
-
-app.delete('/api/properties/:id/admin-delete', async (req, res) => {
-    const { id } = req.params;
-    try {
-        const property = await Property.findById(id);
-        if (!property) {
-            return res.status(404).json({ message: 'Property not found.' });
-        }
-        
-        const conversations = await Conversation.find({ property_id: id });
-        const conversationIds = conversations.map(c => c._id);
-
-        await Message.deleteMany({ conversation_id: { $in: conversationIds } });
-        await Conversation.deleteMany({ property_id: id });
-        await Review.deleteMany({ property_id: id });
-        await Favorite.deleteMany({ property_id: id });
-        await Property.findByIdAndDelete(id);
-        
-        console.log(`Admin deleted property ${id} and all associated data.`);
-        res.json({ message: 'Property and all associated data deleted successfully by admin.' });
-    } catch (error) {
-        console.error(`Admin delete error for property ${id}:`, error);
-        res.status(500).json({ message: 'Server error during admin deletion.' });
-    }
-});
-
-
 app.get('/api/conversations', authenticateToken, async (req, res) => {
     const userId = req.user.userId;
     try {
         const conversations = await Conversation.find({ $or: [{ student_id: userId }, { landlord_id: userId }] })
-            .populate('property_id', 'title')
-            .populate('student_id', 'email')
-            .populate('landlord_id', 'email')
+            .populate('property_id', 'title').populate('student_id', 'email').populate('landlord_id', 'email')
             .sort({ createdAt: -1 });
-
-        const validConversations = conversations.filter(c => c.property_id);
-        
-        res.json(validConversations);
+        res.json(conversations);
     } catch (error) {
         res.status(500).json({ message: 'Server error fetching conversations.' });
     }
 });
-
 
 app.post('/api/conversations', authenticateToken, async (req, res) => {
     const { property_id, landlord_id } = req.body;
@@ -398,7 +373,7 @@ app.get('/api/conversations/:id/messages', authenticateToken, async (req, res) =
 app.get('/api/favorites', authenticateToken, async (req, res) => {
     try {
         const favorites = await Favorite.find({ user_id: req.user.userId }).populate('property_id');
-        res.json(favorites.map(fav => fav.property_id).filter(p => p != null));
+        res.json(favorites.map(fav => fav.property_id));
     } catch (error) {
         res.status(500).json({ message: 'Server error fetching favorites.' });
     }
@@ -484,7 +459,7 @@ app.get('/api/dashboard/stats', authenticateToken, async (req, res) => {
     }
 });
 
+
 server.listen(PORT, () => {
   console.log(`Backend server with WebSocket running on http://localhost:${PORT}`);
 });
-
