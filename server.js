@@ -12,6 +12,12 @@ const mongoose = require('mongoose');
 
 // --- Database Connection ---
 const connectDB = async () => {
+    // Check if the MongoDB connection URI is defined in the environment variables
+    if (!process.env.MONGO_URI) {
+        console.error('FATAL ERROR: MONGO_URI is not defined in the environment variables.');
+        console.error('Please add your MONGO_URI to your deployment environment secrets.');
+        process.exit(1); // Exit the application with a failure code
+    }
     try {
         await mongoose.connect(process.env.MONGO_URI, {
             useNewUrlParser: true,
@@ -475,3 +481,4 @@ app.get('/api/dashboard/stats', authenticateToken, async (req, res) => {
 server.listen(PORT, () => {
     console.log(`Backend server with WebSocket running on http://localhost:${PORT}`);
 });
+
