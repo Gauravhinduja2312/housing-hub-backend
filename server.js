@@ -488,4 +488,3 @@ app.get('/api/dashboard/stats', authenticateToken, async (req, res) => {
 server.listen(PORT, () => {
   console.log(`Backend server with WebSocket running on http://localhost:${PORT}`);
 });
-
