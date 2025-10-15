@@ -23,7 +23,7 @@ const JWT_SECRET = process.env.JWT_SECRET || "super-secret-key-change-this";
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
-// REMOVED: const otpStore = {};
+const otpStore = {};
 
 // --- Mongoose Schemas ---
 const UserSchema = new mongoose.Schema({
@@ -117,7 +117,21 @@ const authenticateToken = (req, res, next) => {
   });
 };
 
-// --- WebSocket Logic (unchanged) ---
+const sendEmail = async (to, subject, html) => {
+    try {
+        await transporter.sendMail({
+            from: process.env.SENDGRID_FROM_EMAIL,
+            to: to,
+            subject: subject,
+            html: html,
+        });
+        console.log(`Email sent to ${to}`);
+    } catch (error) {
+        console.error(`Error sending email to ${to}:`, error);
+    }
+};
+
+// --- START OF UPDATED WEBSOCKET CODE ---
 wss.on('connection', (ws) => {
   ws.on('message', async (message) => {
     try {
@@ -127,7 +141,7 @@ wss.on('connection', (ws) => {
         jwt.verify(data.token, JWT_SECRET, (err, user) => {
           if (!err) {
             ws.userId = user.userId;
-            ws.userType = user.userType; 
+            ws.userType = user.userType; // Store userType for chatbot logic
             ws.conversationId = data.conversationId;
           } else {
             ws.close();
@@ -136,15 +150,19 @@ wss.on('connection', (ws) => {
       }
       else if (data.type === 'message' && ws.userId) {
         const { conversation_id, content } = data.payload;
+
+        // Save the original user's message
         const newMessage = new Message({ conversation_id, sender_id: ws.userId, content });
         await newMessage.save();
 
+        // Broadcast the original message to other clients in the conversation
         wss.clients.forEach(client => {
           if (client !== ws && client.readyState === ws.OPEN && client.conversationId === conversation_id) {
             client.send(JSON.stringify({ type: 'newMessage', payload: newMessage }));
           }
         });
 
+        // --- Chatbot Logic ---
         if (ws.userType === 'student') {
           const conversation = await Conversation.findById(conversation_id);
           if (!conversation) return;
@@ -160,27 +178,33 @@ wss.on('connection', (ws) => {
             botReply = "You can reach the landlord by replying to this message. For urgent matters, their contact number is 555-123-4567.";
           } else if (lowerCaseContent.includes('help') || lowerCaseContent.includes('support')) {
             botReply = "This is an automated message. The landlord will get back to you shortly. If you have questions about availability or contact info, please ask directly.";
+          
+          // --- NEW EXAMPLES ---
           } else if (lowerCaseContent.includes('price') || lowerCaseContent.includes('rent')) {
             botReply = "The price is listed on the property details page. For specific questions about payment, the landlord will get back to you soon.";
           } else if (lowerCaseContent.includes('amenities') || lowerCaseContent.includes('wifi') || lowerCaseContent.includes('parking')) {
             botReply = "You can find a full list of amenities on the property details page. The landlord will respond shortly with any specific details.";
           }
+          // --- END OF NEW EXAMPLES ---
+
 
           if (botReply) {
+            // Simulate a "typing" delay for the bot
             setTimeout(async () => {
               const botMessage = new Message({
                 conversation_id,
-                sender_id: landlordId, 
+                sender_id: landlordId, // Send the message as if it's from the landlord
                 content: botReply,
               });
               await botMessage.save();
-              
+
+              // Broadcast the bot's reply to everyone in the conversation
               wss.clients.forEach(client => {
                 if (client.readyState === ws.OPEN && client.conversationId === conversation_id) {
                   client.send(JSON.stringify({ type: 'newMessage', payload: botMessage }));
                 }
               });
-            }, 1500);
+            }, 1500); // 1.5-second delay
           }
         }
       }
@@ -189,50 +213,47 @@ wss.on('connection', (ws) => {
     }
   });
 });
+// --- END OF UPDATED WEBSOCKET CODE ---
 
 
 // --- REST API Routes ---
-
-// UPDATED /api/signup ROUTE
+// (The rest of your API routes remain unchanged)
 app.post('/api/signup', async (req, res) => {
     const { email, password, userType } = req.body;
     try {
         const existingUser = await User.findOne({ email });
-        if (existingUser) {
-            return res.status(409).json({ message: 'Email already registered.' });
-        }
-
+        if (existingUser) return res.status(409).json({ message: 'Email already registered.' });
         const hashedPassword = await bcrypt.hash(password, 10);
-        
-        const newUser = new User({
-            email,
-            password: hashedPassword,
-            user_type: userType
-        });
-        
-        await newUser.save();
-
-        const token = jwt.sign(
-            { userId: newUser._id, email: newUser.email, userType: newUser.user_type },
-            JWT_SECRET,
-            { expiresIn: "1h" }
-        );
-
-        res.status(201).json({
-            message: 'User registered successfully!',
-            token,
-            email: newUser.email,
-            userId: newUser._id,
-            userType: newUser.user_type
-        });
-
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+        otpStore[email] = { hashedPassword, userType, otp, timestamp: Date.now() };
+        const subject = "Your Housing Hub Verification Code";
+        const html = `<h1>Housing Hub Email Verification</h1><p>Your OTP is: <strong>${otp}</strong></p><p>This code expires in 10 minutes.</p>`;
+        // await sendEmail(email, subject, html);
+        console.log('Generated OTP for', email, ':', otp); // Keep this for local testing
+        setTimeout(() => { if (otpStore[email]?.otp === otp) delete otpStore[email]; }, 600000);
+        res.status(200).json({ message: 'OTP sent to your email.' });
     } catch (error) {
-        console.error('Signup Error:', error);
         res.status(500).json({ message: 'Server error during signup.' });
     }
 });
 
-// REMOVED /api/verify-otp ROUTE
+app.post('/api/verify-otp', async (req, res) => {
+    const { email, otp } = req.body;
+    const storedData = otpStore[email];
+    if (!storedData || storedData.otp !== otp) {
+        return res.status(400).json({ message: 'Invalid or expired OTP.' });
+    }
+    try {
+        const { hashedPassword, userType } = storedData;
+        const newUser = new User({ email, password: hashedPassword, user_type: userType });
+        await newUser.save();
+        delete otpStore[email];
+        const token = jwt.sign({ userId: newUser._id, email: newUser.email, userType: newUser.user_type }, JWT_SECRET, { expiresIn: "1h" });
+        res.status(201).json({ message: 'User registered!', token, email: newUser.email, userId: newUser._id, userType: newUser.user_type });
+    } catch (error) {
+        res.status(500).json({ message: 'Server error during user creation.' });
+    }
+});
 
 app.post("/api/login", async (req, res) => {
     const { email, password } = req.body;
@@ -247,8 +268,6 @@ app.post("/api/login", async (req, res) => {
         res.status(500).json({ message: "Server error." });
     }
 });
-
-// --- Other API Routes (unchanged) ---
 
 app.get('/api/properties', async (req, res) => {
     try {
@@ -458,7 +477,6 @@ app.get('/api/dashboard/stats', authenticateToken, async (req, res) => {
         res.status(500).json({ message: 'Server error fetching dashboard stats.' });
     }
 });
-
 
 server.listen(PORT, () => {
   console.log(`Backend server with WebSocket running on http://localhost:${PORT}`);
