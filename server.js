@@ -21,7 +21,7 @@ const JWT_SECRET = process.env.JWT_SECRET || "super-secret-key-change-this";
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
-// --- Mongoose Schemas (unchanged) ---
+// --- Mongoose Schemas ---
 const UserSchema = new mongoose.Schema({
     email: { type: String, required: true, unique: true, lowercase: true },
     password: { type: String, required: true },
@@ -62,7 +62,7 @@ const FavoriteSchema = new mongoose.Schema({
 FavoriteSchema.index({ user_id: 1, property_id: 1 }, { unique: true });
 
 const ConversationSchema = new mongoose.Schema({
-    property_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Property', required: true },
+    property_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Property' },
     student_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     landlord_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
 }, { timestamps: true });
@@ -77,7 +77,7 @@ const PropertyViewSchema = new mongoose.Schema({
     property_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Property', required: true },
 }, { timestamps: true });
 
-// --- Mongoose Models (unchanged) ---
+// --- Mongoose Models ---
 const User = mongoose.model('User', UserSchema);
 const Property = mongoose.model('Property', PropertySchema);
 const Review = mongoose.model('Review', ReviewSchema);
@@ -86,7 +86,7 @@ const Conversation = mongoose.model('Conversation', ConversationSchema);
 const Message = mongoose.model('Message', MessageSchema);
 const PropertyView = mongoose.model('PropertyView', PropertyViewSchema);
 
-// --- Middleware & Config (unchanged) ---
+// --- Middleware & Config ---
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
@@ -112,77 +112,76 @@ const authenticateToken = (req, res, next) => {
 
 // --- WebSocket Logic (unchanged) ---
 wss.on('connection', (ws) => {
-  ws.on('message', async (message) => {
-    try {
-      const data = JSON.parse(message);
-
-      if (data.type === 'auth' && data.token) {
-        jwt.verify(data.token, JWT_SECRET, (err, user) => {
-          if (!err) {
-            ws.userId = user.userId;
-            ws.userType = user.userType; 
-            ws.conversationId = data.conversationId;
-          } else {
-            ws.close();
-          }
-        });
-      }
-      else if (data.type === 'message' && ws.userId) {
-        const { conversation_id, content } = data.payload;
-        const newMessage = new Message({ conversation_id, sender_id: ws.userId, content });
-        await newMessage.save();
-
-        wss.clients.forEach(client => {
-          if (client !== ws && client.readyState === ws.OPEN && client.conversationId === conversation_id) {
-            client.send(JSON.stringify({ type: 'newMessage', payload: newMessage }));
-          }
-        });
-
-        if (ws.userType === 'student') {
-          const conversation = await Conversation.findById(conversation_id);
-          if (!conversation) return;
-
-          const landlordId = conversation.landlord_id;
-          let botReply = null;
-
-          const lowerCaseContent = content.toLowerCase();
-
-          if (lowerCaseContent.includes('available') || lowerCaseContent.includes('still have this')) {
-            botReply = "Hello! Yes, this property is still available. Feel free to ask any other questions you may have.";
-          } else if (lowerCaseContent.includes('contact') || lowerCaseContent.includes('phone') || lowerCaseContent.includes('number')) {
-            botReply = "You can reach the landlord by replying to this message. For urgent matters, their contact number is 555-123-4567.";
-          } else if (lowerCaseContent.includes('help') || lowerCaseContent.includes('support')) {
-            botReply = "This is an automated message. The landlord will get back to you shortly. If you have questions about availability or contact info, please ask directly.";
-          } else if (lowerCaseContent.includes('price') || lowerCaseContent.includes('rent')) {
-            botReply = "The price is listed on the property details page. For specific questions about payment, the landlord will get back to you soon.";
-          } else if (lowerCaseContent.includes('amenities') || lowerCaseContent.includes('wifi') || lowerCaseContent.includes('parking')) {
-            botReply = "You can find a full list of amenities on the property details page. The landlord will respond shortly with any specific details.";
-          }
-
-          if (botReply) {
-            setTimeout(async () => {
-              const botMessage = new Message({
-                conversation_id,
-                sender_id: landlordId, 
-                content: botReply,
-              });
-              await botMessage.save();
-              
-              wss.clients.forEach(client => {
-                if (client.readyState === ws.OPEN && client.conversationId === conversation_id) {
-                  client.send(JSON.stringify({ type: 'newMessage', payload: botMessage }));
-                }
-              });
-            }, 1500);
+    ws.on('message', async (message) => {
+      try {
+        const data = JSON.parse(message);
+  
+        if (data.type === 'auth' && data.token) {
+          jwt.verify(data.token, JWT_SECRET, (err, user) => {
+            if (!err) {
+              ws.userId = user.userId;
+              ws.userType = user.userType; 
+              ws.conversationId = data.conversationId;
+            } else {
+              ws.close();
+            }
+          });
+        }
+        else if (data.type === 'message' && ws.userId) {
+          const { conversation_id, content } = data.payload;
+          const newMessage = new Message({ conversation_id, sender_id: ws.userId, content });
+          await newMessage.save();
+  
+          wss.clients.forEach(client => {
+            if (client !== ws && client.readyState === ws.OPEN && client.conversationId === conversation_id) {
+              client.send(JSON.stringify({ type: 'newMessage', payload: newMessage }));
+            }
+          });
+  
+          if (ws.userType === 'student') {
+            const conversation = await Conversation.findById(conversation_id);
+            if (!conversation) return;
+  
+            const landlordId = conversation.landlord_id;
+            let botReply = null;
+  
+            const lowerCaseContent = content.toLowerCase();
+  
+            if (lowerCaseContent.includes('available') || lowerCaseContent.includes('still have this')) {
+              botReply = "Hello! Yes, this property is still available. Feel free to ask any other questions you may have.";
+            } else if (lowerCaseContent.includes('contact') || lowerCaseContent.includes('phone') || lowerCaseContent.includes('number')) {
+              botReply = "You can reach the landlord by replying to this message. For urgent matters, their contact number is 555-123-4567.";
+            } else if (lowerCaseContent.includes('help') || lowerCaseContent.includes('support')) {
+              botReply = "This is an automated message. The landlord will get back to you shortly. If you have questions about availability or contact info, please ask directly.";
+            } else if (lowerCaseContent.includes('price') || lowerCaseContent.includes('rent')) {
+              botReply = "The price is listed on the property details page. For specific questions about payment, the landlord will get back to you soon.";
+            } else if (lowerCaseContent.includes('amenities') || lowerCaseContent.includes('wifi') || lowerCaseContent.includes('parking')) {
+              botReply = "You can find a full list of amenities on the property details page. The landlord will respond shortly with any specific details.";
+            }
+  
+            if (botReply) {
+              setTimeout(async () => {
+                const botMessage = new Message({
+                  conversation_id,
+                  sender_id: landlordId, 
+                  content: botReply,
+                });
+                await botMessage.save();
+                
+                wss.clients.forEach(client => {
+                  if (client.readyState === ws.OPEN && client.conversationId === conversation_id) {
+                    client.send(JSON.stringify({ type: 'newMessage', payload: botMessage }));
+                  }
+                });
+              }, 1500);
+            }
           }
         }
+      } catch (error) {
+        console.error('WebSocket error:', error);
       }
-    } catch (error) {
-      console.error('WebSocket error:', error);
-    }
+    });
   });
-});
-
 
 // --- REST API Routes ---
 app.post('/api/signup', async (req, res) => {
@@ -193,22 +192,11 @@ app.post('/api/signup', async (req, res) => {
             return res.status(409).json({ message: 'Email already registered.' });
         }
         const hashedPassword = await bcrypt.hash(password, 10);
-        const newUser = new User({
-            email,
-            password: hashedPassword,
-            user_type: userType,
-        });
+        const newUser = new User({ email, password: hashedPassword, user_type: userType });
         await newUser.save();
         const token = jwt.sign({ userId: newUser._id, email: newUser.email, userType: newUser.user_type }, JWT_SECRET, { expiresIn: '1h' });
-        res.status(201).json({
-            message: 'User registered successfully!',
-            token,
-            email: newUser.email,
-            userId: newUser._id,
-            userType: newUser.user_type,
-        });
+        res.status(201).json({ message: 'User registered successfully!', token, email: newUser.email, userId: newUser._id, userType: newUser.user_type });
     } catch (error) {
-        console.error('Error during signup:', error);
         res.status(500).json({ message: 'Server error during signup.' });
     }
 });
@@ -226,7 +214,6 @@ app.post("/api/login", async (req, res) => {
         res.status(500).json({ message: "Server error." });
     }
 });
-
 
 app.get('/api/properties', async (req, res) => {
     try {
@@ -256,16 +243,10 @@ app.post('/api/properties', authenticateToken, upload.array('images', 5), async 
                 imageUrls.push(result.secure_url);
             }
         }
-        const newProperty = new Property({ 
-            ...req.body, 
-            image_url: imageUrls[0] || '',
-            images: imageUrls,
-            landlord_id: req.user.userId 
-        });
+        const newProperty = new Property({ ...req.body, image_url: imageUrls[0] || '', images: imageUrls, landlord_id: req.user.userId });
         await newProperty.save();
         res.status(201).json({ message: 'Property added successfully!', propertyId: newProperty._id });
     } catch (error) {
-        console.error("Error adding property:", error)
         res.status(500).json({ message: 'Server error adding property.' });
     }
 });
@@ -294,10 +275,7 @@ app.put('/api/properties/:id', authenticateToken, upload.array('images', 5), asy
     }
 });
 
-
-// --- UPDATED DELETE ROUTES WITH FULL CLEANUP ---
-
-// Standard delete for property owners
+// --- UPDATED DELETE LOGIC ---
 app.delete('/api/properties/:id', authenticateToken, async (req, res) => {
     const { id } = req.params;
     try {
@@ -305,19 +283,14 @@ app.delete('/api/properties/:id', authenticateToken, async (req, res) => {
         if (!property || property.landlord_id.toString() !== req.user.userId) {
             return res.status(403).json({ message: 'Unauthorized.' });
         }
-
-        // Find all conversations related to this property
+        
         const conversations = await Conversation.find({ property_id: id });
         const conversationIds = conversations.map(c => c._id);
 
-        // Delete all messages in those conversations
         await Message.deleteMany({ conversation_id: { $in: conversationIds } });
-        // Delete the conversations themselves
         await Conversation.deleteMany({ property_id: id });
-        // Delete reviews and favorites
         await Review.deleteMany({ property_id: id });
         await Favorite.deleteMany({ property_id: id });
-        // Finally, delete the property
         await Property.findByIdAndDelete(id);
 
         res.json({ message: 'Property and all associated data deleted successfully.' });
@@ -326,47 +299,18 @@ app.delete('/api/properties/:id', authenticateToken, async (req, res) => {
     }
 });
 
-
-// Admin delete route
-app.delete('/api/properties/:id/admin-delete', async (req, res) => {
-    const { id } = req.params;
-    try {
-        const property = await Property.findById(id);
-        if (!property) {
-            return res.status(404).json({ message: 'Property not found.' });
-        }
-        
-        // Find all conversations related to this property
-        const conversations = await Conversation.find({ property_id: id });
-        const conversationIds = conversations.map(c => c._id);
-
-        // Delete all messages in those conversations
-        await Message.deleteMany({ conversation_id: { $in: conversationIds } });
-        // Delete the conversations themselves
-        await Conversation.deleteMany({ property_id: id });
-        // Delete reviews and favorites
-        await Review.deleteMany({ property_id: id });
-        await Favorite.deleteMany({ property_id: id });
-        // Finally, delete the property
-        await Property.findByIdAndDelete(id);
-        
-        console.log(`Admin deleted property ${id} and all associated data.`);
-        res.json({ message: 'Property and all associated data deleted successfully by admin.' });
-    } catch (error) {
-        console.error(`Admin delete error for property ${id}:`, error);
-        res.status(500).json({ message: 'Server error during admin deletion.' });
-    }
-});
-
-
-// --- Other API Routes (unchanged) ---
+// --- UPDATED CONVERSATIONS ROUTE ---
 app.get('/api/conversations', authenticateToken, async (req, res) => {
     const userId = req.user.userId;
     try {
         const conversations = await Conversation.find({ $or: [{ student_id: userId }, { landlord_id: userId }] })
             .populate('property_id', 'title').populate('student_id', 'email').populate('landlord_id', 'email')
             .sort({ createdAt: -1 });
-        res.json(conversations);
+
+        // Filter out conversations where the property has been deleted
+        const validConversations = conversations.filter(c => c.property_id);
+        
+        res.json(validConversations);
     } catch (error) {
         res.status(500).json({ message: 'Server error fetching conversations.' });
     }
@@ -401,7 +345,7 @@ app.get('/api/conversations/:id/messages', authenticateToken, async (req, res) =
 app.get('/api/favorites', authenticateToken, async (req, res) => {
     try {
         const favorites = await Favorite.find({ user_id: req.user.userId }).populate('property_id');
-        res.json(favorites.map(fav => fav.property_id));
+        res.json(favorites.map(fav => fav.property_id).filter(p => p != null));
     } catch (error) {
         res.status(500).json({ message: 'Server error fetching favorites.' });
     }
