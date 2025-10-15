@@ -9,6 +9,8 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const multer = require('multer');
 const cloudinary = require('cloudinary').v2;
+const nodemailer = require('nodemailer');
+const sgTransport = require('nodemailer-sendgrid-transport');
 const mongoose = require('mongoose');
 const connectDB = require('./db');
 
@@ -20,6 +22,8 @@ const JWT_SECRET = process.env.JWT_SECRET || "super-secret-key-change-this";
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
+
+// REMOVED: const otpStore = {};
 
 // --- Mongoose Schemas ---
 const UserSchema = new mongoose.Schema({
@@ -39,8 +43,8 @@ const PropertySchema = new mongoose.Schema({
     bedrooms: Number,
     bathrooms: Number,
     amenities: String,
-    image_url: String,
-    images: [String],
+    image_url: String, // Main display image
+    images: [String],  // Gallery images
     floor_plan_url: String,
     virtual_tour_url: String,
     lat: Number,
@@ -62,7 +66,7 @@ const FavoriteSchema = new mongoose.Schema({
 FavoriteSchema.index({ user_id: 1, property_id: 1 }, { unique: true });
 
 const ConversationSchema = new mongoose.Schema({
-    property_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Property' },
+    property_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Property', required: true },
     student_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     landlord_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
 }, { timestamps: true });
@@ -87,6 +91,9 @@ const Message = mongoose.model('Message', MessageSchema);
 const PropertyView = mongoose.model('PropertyView', PropertyViewSchema);
 
 // --- Middleware & Config ---
+const options = { auth: { api_key: process.env.SENDGRID_API_KEY } };
+const transporter = nodemailer.createTransport(sgTransport(options));
+
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
@@ -112,78 +119,81 @@ const authenticateToken = (req, res, next) => {
 
 // --- WebSocket Logic (unchanged) ---
 wss.on('connection', (ws) => {
-    ws.on('message', async (message) => {
-      try {
-        const data = JSON.parse(message);
-  
-        if (data.type === 'auth' && data.token) {
-          jwt.verify(data.token, JWT_SECRET, (err, user) => {
-            if (!err) {
-              ws.userId = user.userId;
-              ws.userType = user.userType; 
-              ws.conversationId = data.conversationId;
-            } else {
-              ws.close();
-            }
-          });
-        }
-        else if (data.type === 'message' && ws.userId) {
-          const { conversation_id, content } = data.payload;
-          const newMessage = new Message({ conversation_id, sender_id: ws.userId, content });
-          await newMessage.save();
-  
-          wss.clients.forEach(client => {
-            if (client !== ws && client.readyState === ws.OPEN && client.conversationId === conversation_id) {
-              client.send(JSON.stringify({ type: 'newMessage', payload: newMessage }));
-            }
-          });
-  
-          if (ws.userType === 'student') {
-            const conversation = await Conversation.findById(conversation_id);
-            if (!conversation) return;
-  
-            const landlordId = conversation.landlord_id;
-            let botReply = null;
-  
-            const lowerCaseContent = content.toLowerCase();
-  
-            if (lowerCaseContent.includes('available') || lowerCaseContent.includes('still have this')) {
-              botReply = "Hello! Yes, this property is still available. Feel free to ask any other questions you may have.";
-            } else if (lowerCaseContent.includes('contact') || lowerCaseContent.includes('phone') || lowerCaseContent.includes('number')) {
-              botReply = "You can reach the landlord by replying to this message. For urgent matters, their contact number is 555-123-4567.";
-            } else if (lowerCaseContent.includes('help') || lowerCaseContent.includes('support')) {
-              botReply = "This is an automated message. The landlord will get back to you shortly. If you have questions about availability or contact info, please ask directly.";
-            } else if (lowerCaseContent.includes('price') || lowerCaseContent.includes('rent')) {
-              botReply = "The price is listed on the property details page. For specific questions about payment, the landlord will get back to you soon.";
-            } else if (lowerCaseContent.includes('amenities') || lowerCaseContent.includes('wifi') || lowerCaseContent.includes('parking')) {
-              botReply = "You can find a full list of amenities on the property details page. The landlord will respond shortly with any specific details.";
-            }
-  
-            if (botReply) {
-              setTimeout(async () => {
-                const botMessage = new Message({
-                  conversation_id,
-                  sender_id: landlordId, 
-                  content: botReply,
-                });
-                await botMessage.save();
-                
-                wss.clients.forEach(client => {
-                  if (client.readyState === ws.OPEN && client.conversationId === conversation_id) {
-                    client.send(JSON.stringify({ type: 'newMessage', payload: botMessage }));
-                  }
-                });
-              }, 1500);
-            }
+  ws.on('message', async (message) => {
+    try {
+      const data = JSON.parse(message);
+
+      if (data.type === 'auth' && data.token) {
+        jwt.verify(data.token, JWT_SECRET, (err, user) => {
+          if (!err) {
+            ws.userId = user.userId;
+            ws.userType = user.userType; 
+            ws.conversationId = data.conversationId;
+          } else {
+            ws.close();
+          }
+        });
+      }
+      else if (data.type === 'message' && ws.userId) {
+        const { conversation_id, content } = data.payload;
+        const newMessage = new Message({ conversation_id, sender_id: ws.userId, content });
+        await newMessage.save();
+
+        wss.clients.forEach(client => {
+          if (client !== ws && client.readyState === ws.OPEN && client.conversationId === conversation_id) {
+            client.send(JSON.stringify({ type: 'newMessage', payload: newMessage }));
+          }
+        });
+
+        if (ws.userType === 'student') {
+          const conversation = await Conversation.findById(conversation_id);
+          if (!conversation) return;
+
+          const landlordId = conversation.landlord_id;
+          let botReply = null;
+
+          const lowerCaseContent = content.toLowerCase();
+
+          if (lowerCaseContent.includes('available') || lowerCaseContent.includes('still have this')) {
+            botReply = "Hello! Yes, this property is still available. Feel free to ask any other questions you may have.";
+          } else if (lowerCaseContent.includes('contact') || lowerCaseContent.includes('phone') || lowerCaseContent.includes('number')) {
+            botReply = "You can reach the landlord by replying to this message. For urgent matters, their contact number is 555-123-4567.";
+          } else if (lowerCaseContent.includes('help') || lowerCaseContent.includes('support')) {
+            botReply = "This is an automated message. The landlord will get back to you shortly. If you have questions about availability or contact info, please ask directly.";
+          } else if (lowerCaseContent.includes('price') || lowerCaseContent.includes('rent')) {
+            botReply = "The price is listed on the property details page. For specific questions about payment, the landlord will get back to you soon.";
+          } else if (lowerCaseContent.includes('amenities') || lowerCaseContent.includes('wifi') || lowerCaseContent.includes('parking')) {
+            botReply = "You can find a full list of amenities on the property details page. The landlord will respond shortly with any specific details.";
+          }
+
+          if (botReply) {
+            setTimeout(async () => {
+              const botMessage = new Message({
+                conversation_id,
+                sender_id: landlordId, 
+                content: botReply,
+              });
+              await botMessage.save();
+              
+              wss.clients.forEach(client => {
+                if (client.readyState === ws.OPEN && client.conversationId === conversation_id) {
+                  client.send(JSON.stringify({ type: 'newMessage', payload: botMessage }));
+                }
+              });
+            }, 1500);
           }
         }
-      } catch (error) {
-        console.error('WebSocket error:', error);
       }
-    });
+    } catch (error) {
+      console.error('WebSocket error:', error);
+    }
   });
+});
+
 
 // --- REST API Routes ---
+
+// UPDATED /api/signup ROUTE
 app.post('/api/signup', async (req, res) => {
     const { email, password, userType } = req.body;
     try {
@@ -191,15 +201,38 @@ app.post('/api/signup', async (req, res) => {
         if (existingUser) {
             return res.status(409).json({ message: 'Email already registered.' });
         }
+
         const hashedPassword = await bcrypt.hash(password, 10);
-        const newUser = new User({ email, password: hashedPassword, user_type: userType });
+        
+        const newUser = new User({
+            email,
+            password: hashedPassword,
+            user_type: userType
+        });
+        
         await newUser.save();
-        const token = jwt.sign({ userId: newUser._id, email: newUser.email, userType: newUser.user_type }, JWT_SECRET, { expiresIn: '1h' });
-        res.status(201).json({ message: 'User registered successfully!', token, email: newUser.email, userId: newUser._id, userType: newUser.user_type });
+
+        const token = jwt.sign(
+            { userId: newUser._id, email: newUser.email, userType: newUser.user_type },
+            JWT_SECRET,
+            { expiresIn: "1h" }
+        );
+
+        res.status(201).json({
+            message: 'User registered successfully!',
+            token,
+            email: newUser.email,
+            userId: newUser._id,
+            userType: newUser.user_type
+        });
+
     } catch (error) {
+        console.error('Signup Error:', error);
         res.status(500).json({ message: 'Server error during signup.' });
     }
 });
+
+// REMOVED /api/verify-otp ROUTE
 
 app.post("/api/login", async (req, res) => {
     const { email, password } = req.body;
@@ -214,6 +247,8 @@ app.post("/api/login", async (req, res) => {
         res.status(500).json({ message: "Server error." });
     }
 });
+
+// --- Other API Routes (unchanged) ---
 
 app.get('/api/properties', async (req, res) => {
     try {
@@ -243,10 +278,16 @@ app.post('/api/properties', authenticateToken, upload.array('images', 5), async 
                 imageUrls.push(result.secure_url);
             }
         }
-        const newProperty = new Property({ ...req.body, image_url: imageUrls[0] || '', images: imageUrls, landlord_id: req.user.userId });
+        const newProperty = new Property({ 
+            ...req.body, 
+            image_url: imageUrls[0] || '',
+            images: imageUrls,
+            landlord_id: req.user.userId 
+        });
         await newProperty.save();
         res.status(201).json({ message: 'Property added successfully!', propertyId: newProperty._id });
     } catch (error) {
+        console.error("Error adding property:", error)
         res.status(500).json({ message: 'Server error adding property.' });
     }
 });
@@ -275,7 +316,6 @@ app.put('/api/properties/:id', authenticateToken, upload.array('images', 5), asy
     }
 });
 
-// --- UPDATED DELETE LOGIC ---
 app.delete('/api/properties/:id', authenticateToken, async (req, res) => {
     const { id } = req.params;
     try {
@@ -283,34 +323,22 @@ app.delete('/api/properties/:id', authenticateToken, async (req, res) => {
         if (!property || property.landlord_id.toString() !== req.user.userId) {
             return res.status(403).json({ message: 'Unauthorized.' });
         }
-        
-        const conversations = await Conversation.find({ property_id: id });
-        const conversationIds = conversations.map(c => c._id);
-
-        await Message.deleteMany({ conversation_id: { $in: conversationIds } });
-        await Conversation.deleteMany({ property_id: id });
+        await Property.findByIdAndDelete(id);
         await Review.deleteMany({ property_id: id });
         await Favorite.deleteMany({ property_id: id });
-        await Property.findByIdAndDelete(id);
-
-        res.json({ message: 'Property and all associated data deleted successfully.' });
+        res.json({ message: 'Property deleted successfully.' });
     } catch (error) {
         res.status(500).json({ message: 'Server error deleting property.' });
     }
 });
 
-// --- UPDATED CONVERSATIONS ROUTE ---
 app.get('/api/conversations', authenticateToken, async (req, res) => {
     const userId = req.user.userId;
     try {
         const conversations = await Conversation.find({ $or: [{ student_id: userId }, { landlord_id: userId }] })
             .populate('property_id', 'title').populate('student_id', 'email').populate('landlord_id', 'email')
             .sort({ createdAt: -1 });
-
-        // Filter out conversations where the property has been deleted
-        const validConversations = conversations.filter(c => c.property_id);
-        
-        res.json(validConversations);
+        res.json(conversations);
     } catch (error) {
         res.status(500).json({ message: 'Server error fetching conversations.' });
     }
@@ -345,7 +373,7 @@ app.get('/api/conversations/:id/messages', authenticateToken, async (req, res) =
 app.get('/api/favorites', authenticateToken, async (req, res) => {
     try {
         const favorites = await Favorite.find({ user_id: req.user.userId }).populate('property_id');
-        res.json(favorites.map(fav => fav.property_id).filter(p => p != null));
+        res.json(favorites.map(fav => fav.property_id));
     } catch (error) {
         res.status(500).json({ message: 'Server error fetching favorites.' });
     }
@@ -431,7 +459,7 @@ app.get('/api/dashboard/stats', authenticateToken, async (req, res) => {
     }
 });
 
+
 server.listen(PORT, () => {
   console.log(`Backend server with WebSocket running on http://localhost:${PORT}`);
 });
-
