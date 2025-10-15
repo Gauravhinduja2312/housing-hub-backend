@@ -1,4 +1,3 @@
-// housing-hub-backend/server.js
 require('dotenv').config();
 const express = require('express');
 const http = require('http');
@@ -9,10 +8,21 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const multer = require('multer');
 const cloudinary = require('cloudinary').v2;
-const nodemailer = require('nodemailer');
-const sgTransport = require('nodemailer-sendgrid-transport');
 const mongoose = require('mongoose');
-const connectDB = require('./db');
+
+// --- Database Connection ---
+const connectDB = async () => {
+    try {
+        await mongoose.connect(process.env.MONGO_URI, {
+            useNewUrlParser: true,
+            useUnifiedTopology: true,
+        });
+        console.log('MongoDB Connected successfully.');
+    } catch (err) {
+        console.error('MongoDB connection error:', err.message);
+        process.exit(1);
+    }
+};
 
 const app = express();
 connectDB();
@@ -22,8 +32,6 @@ const JWT_SECRET = process.env.JWT_SECRET || "super-secret-key-change-this";
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
-
-const otpStore = {};
 
 // --- Mongoose Schemas ---
 const UserSchema = new mongoose.Schema({
@@ -91,9 +99,6 @@ const Message = mongoose.model('Message', MessageSchema);
 const PropertyView = mongoose.model('PropertyView', PropertyViewSchema);
 
 // --- Middleware & Config ---
-const options = { auth: { api_key: process.env.SENDGRID_API_KEY } };
-const transporter = nodemailer.createTransport(sgTransport(options));
-
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
@@ -107,151 +112,125 @@ app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
 const authenticateToken = (req, res, next) => {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
-  if (token == null) return res.sendStatus(401);
-  jwt.verify(token, JWT_SECRET, (err, user) => {
-    if (err) return res.sendStatus(403);
-    req.user = user;
-    next();
-  });
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+    if (token == null) return res.sendStatus(401);
+    jwt.verify(token, JWT_SECRET, (err, user) => {
+        if (err) return res.sendStatus(403);
+        req.user = user;
+        next();
+    });
 };
 
-const sendEmail = async (to, subject, html) => {
-    try {
-        await transporter.sendMail({
-            from: process.env.SENDGRID_FROM_EMAIL,
-            to: to,
-            subject: subject,
-            html: html,
-        });
-        console.log(`Email sent to ${to}`);
-    } catch (error) {
-        console.error(`Error sending email to ${to}:`, error);
-    }
-};
-
-// --- START OF UPDATED WEBSOCKET CODE ---
+// --- WebSocket Server Logic ---
 wss.on('connection', (ws) => {
-  ws.on('message', async (message) => {
-    try {
-      const data = JSON.parse(message);
+    ws.on('message', async (message) => {
+        try {
+            const data = JSON.parse(message);
 
-      if (data.type === 'auth' && data.token) {
-        jwt.verify(data.token, JWT_SECRET, (err, user) => {
-          if (!err) {
-            ws.userId = user.userId;
-            ws.userType = user.userType; // Store userType for chatbot logic
-            ws.conversationId = data.conversationId;
-          } else {
-            ws.close();
-          }
-        });
-      }
-      else if (data.type === 'message' && ws.userId) {
-        const { conversation_id, content } = data.payload;
+            if (data.type === 'auth' && data.token) {
+                jwt.verify(data.token, JWT_SECRET, (err, user) => {
+                    if (!err && user) {
+                        ws.userId = user.userId;
+                        ws.userType = user.userType;
+                        ws.conversationId = data.conversationId;
+                        console.log(`User ${ws.userId} authenticated for conversation ${ws.conversationId}`);
+                    } else {
+                        ws.close();
+                    }
+                });
+            } else if (data.type === 'message' && ws.userId) {
+                const { conversation_id, content } = data.payload;
 
-        // Save the original user's message
-        const newMessage = new Message({ conversation_id, sender_id: ws.userId, content });
-        await newMessage.save();
+                // 1. Save the user's message to the database
+                const newMessage = new Message({ conversation_id, sender_id: ws.userId, content });
+                await newMessage.save();
 
-        // Broadcast the original message to other clients in the conversation
-        wss.clients.forEach(client => {
-          if (client !== ws && client.readyState === ws.OPEN && client.conversationId === conversation_id) {
-            client.send(JSON.stringify({ type: 'newMessage', payload: newMessage }));
-          }
-        });
+                // 2. FIX: Broadcast the saved message to ALL clients in the conversation, including the sender.
+                // This ensures everyone's UI is in sync with the database.
+                wss.clients.forEach(client => {
+                    if (client.readyState === ws.OPEN && client.conversationId === conversation_id) {
+                        client.send(JSON.stringify({ type: 'newMessage', payload: newMessage }));
+                    }
+                });
 
-        // --- Chatbot Logic ---
-        if (ws.userType === 'student') {
-          const conversation = await Conversation.findById(conversation_id);
-          if (!conversation) return;
+                // 3. Handle Chatbot Logic
+                if (ws.userType === 'student') {
+                    const conversation = await Conversation.findById(conversation_id);
+                    if (!conversation) return;
 
-          const landlordId = conversation.landlord_id;
-          let botReply = null;
+                    const landlordId = conversation.landlord_id;
+                    let botReply = null;
+                    const lowerCaseContent = content.toLowerCase();
 
-          const lowerCaseContent = content.toLowerCase();
+                    if (lowerCaseContent.includes('available') || lowerCaseContent.includes('still have this')) {
+                        botReply = "Hello! Yes, this property is still available. Feel free to ask any other questions you may have.";
+                    } else if (lowerCaseContent.includes('contact') || lowerCaseContent.includes('phone') || lowerCaseContent.includes('number')) {
+                        botReply = "You can reach the landlord by replying to this message. For urgent matters, their contact number is 555-123-4567.";
+                    } else if (lowerCaseContent.includes('help') || lowerCaseContent.includes('support')) {
+                        botReply = "This is an automated message. The landlord will get back to you shortly. If you have questions about availability or contact info, please ask directly.";
+                    } else if (lowerCaseContent.includes('price') || lowerCaseContent.includes('rent')) {
+                        botReply = "The price is listed on the property details page. For specific questions about payment, the landlord will get back to you soon.";
+                    } else if (lowerCaseContent.includes('amenities') || lowerCaseContent.includes('wifi') || lowerCaseContent.includes('parking')) {
+                        botReply = "You can find a full list of amenities on the property details page. The landlord will respond shortly with any specific details.";
+                    }
+                    
+                    if (botReply) {
+                        setTimeout(async () => {
+                            const botMessage = new Message({
+                                conversation_id,
+                                sender_id: landlordId, // Message appears from the landlord
+                                content: botReply,
+                            });
+                            await botMessage.save();
 
-          if (lowerCaseContent.includes('available') || lowerCaseContent.includes('still have this')) {
-            botReply = "Hello! Yes, this property is still available. Feel free to ask any other questions you may have.";
-          } else if (lowerCaseContent.includes('contact') || lowerCaseContent.includes('phone') || lowerCaseContent.includes('number')) {
-            botReply = "You can reach the landlord by replying to this message. For urgent matters, their contact number is 555-123-4567.";
-          } else if (lowerCaseContent.includes('help') || lowerCaseContent.includes('support')) {
-            botReply = "This is an automated message. The landlord will get back to you shortly. If you have questions about availability or contact info, please ask directly.";
-          
-          // --- NEW EXAMPLES ---
-          } else if (lowerCaseContent.includes('price') || lowerCaseContent.includes('rent')) {
-            botReply = "The price is listed on the property details page. For specific questions about payment, the landlord will get back to you soon.";
-          } else if (lowerCaseContent.includes('amenities') || lowerCaseContent.includes('wifi') || lowerCaseContent.includes('parking')) {
-            botReply = "You can find a full list of amenities on the property details page. The landlord will respond shortly with any specific details.";
-          }
-          // --- END OF NEW EXAMPLES ---
-
-
-          if (botReply) {
-            // Simulate a "typing" delay for the bot
-            setTimeout(async () => {
-              const botMessage = new Message({
-                conversation_id,
-                sender_id: landlordId, // Send the message as if it's from the landlord
-                content: botReply,
-              });
-              await botMessage.save();
-
-              // Broadcast the bot's reply to everyone in the conversation
-              wss.clients.forEach(client => {
-                if (client.readyState === ws.OPEN && client.conversationId === conversation_id) {
-                  client.send(JSON.stringify({ type: 'newMessage', payload: botMessage }));
+                            // Broadcast the bot's reply to everyone in the conversation
+                            wss.clients.forEach(client => {
+                                if (client.readyState === ws.OPEN && client.conversationId === conversation_id) {
+                                    client.send(JSON.stringify({ type: 'newMessage', payload: botMessage }));
+                                }
+                            });
+                        }, 1500); // 1.5-second delay
+                    }
                 }
-              });
-            }, 1500); // 1.5-second delay
-          }
+            }
+        } catch (error) {
+            console.error('WebSocket error:', error);
         }
-      }
-    } catch (error) {
-      console.error('WebSocket error:', error);
-    }
-  });
-});
-// --- END OF UPDATED WEBSOCKET CODE ---
+    });
 
+    ws.on('close', () => {
+        console.log(`User ${ws.userId} disconnected.`);
+    });
+});
 
 // --- REST API Routes ---
-// (The rest of your API routes remain unchanged)
 app.post('/api/signup', async (req, res) => {
     const { email, password, userType } = req.body;
     try {
+        // FIX: This route now directly creates a user to match the frontend's expectation,
+        // bypassing the non-functional OTP flow.
         const existingUser = await User.findOne({ email });
-        if (existingUser) return res.status(409).json({ message: 'Email already registered.' });
+        if (existingUser) {
+            return res.status(409).json({ message: 'Email already registered.' });
+        }
+        
         const hashedPassword = await bcrypt.hash(password, 10);
-        const otp = Math.floor(100000 + Math.random() * 900000).toString();
-        otpStore[email] = { hashedPassword, userType, otp, timestamp: Date.now() };
-        const subject = "Your Housing Hub Verification Code";
-        const html = `<h1>Housing Hub Email Verification</h1><p>Your OTP is: <strong>${otp}</strong></p><p>This code expires in 10 minutes.</p>`;
-        // await sendEmail(email, subject, html);
-        console.log('Generated OTP for', email, ':', otp); // Keep this for local testing
-        setTimeout(() => { if (otpStore[email]?.otp === otp) delete otpStore[email]; }, 600000);
-        res.status(200).json({ message: 'OTP sent to your email.' });
-    } catch (error) {
-        res.status(500).json({ message: 'Server error during signup.' });
-    }
-});
-
-app.post('/api/verify-otp', async (req, res) => {
-    const { email, otp } = req.body;
-    const storedData = otpStore[email];
-    if (!storedData || storedData.otp !== otp) {
-        return res.status(400).json({ message: 'Invalid or expired OTP.' });
-    }
-    try {
-        const { hashedPassword, userType } = storedData;
         const newUser = new User({ email, password: hashedPassword, user_type: userType });
         await newUser.save();
-        delete otpStore[email];
+
         const token = jwt.sign({ userId: newUser._id, email: newUser.email, userType: newUser.user_type }, JWT_SECRET, { expiresIn: "1h" });
-        res.status(201).json({ message: 'User registered!', token, email: newUser.email, userId: newUser._id, userType: newUser.user_type });
+        
+        res.status(201).json({ 
+            message: 'User registered successfully!', 
+            token, 
+            email: newUser.email, 
+            userId: newUser._id, 
+            userType: newUser.user_type 
+        });
     } catch (error) {
-        res.status(500).json({ message: 'Server error during user creation.' });
+        console.error("Signup Error:", error);
+        res.status(500).json({ message: 'Server error during signup.' });
     }
 });
 
@@ -268,6 +247,8 @@ app.post("/api/login", async (req, res) => {
         res.status(500).json({ message: "Server error." });
     }
 });
+
+// All other API routes remain the same...
 
 app.get('/api/properties', async (req, res) => {
     try {
@@ -293,7 +274,13 @@ app.post('/api/properties', authenticateToken, upload.array('images', 5), async 
         let imageUrls = [];
         if (req.files) {
             for(const file of req.files) {
-                const result = await cloudinary.uploader.upload(`data:${file.mimetype};base64,${file.buffer.toString('base64')}`, { folder: 'housing_hub_properties' });
+                const result = await new Promise((resolve, reject) => {
+                    const uploadStream = cloudinary.uploader.upload_stream({ folder: 'housing_hub_properties' }, (error, result) => {
+                        if (error) reject(error);
+                        else resolve(result);
+                    });
+                    uploadStream.end(file.buffer);
+                });
                 imageUrls.push(result.secure_url);
             }
         }
@@ -322,7 +309,13 @@ app.put('/api/properties/:id', authenticateToken, upload.array('images', 5), asy
         if (req.files && req.files.length > 0) {
             let imageUrls = [];
             for(const file of req.files) {
-                const result = await cloudinary.uploader.upload(`data:${file.mimetype};base64,${file.buffer.toString('base64')}`, { folder: 'housing_hub_properties' });
+                 const result = await new Promise((resolve, reject) => {
+                    const uploadStream = cloudinary.uploader.upload_stream({ folder: 'housing_hub_properties' }, (error, result) => {
+                        if (error) reject(error);
+                        else resolve(result);
+                    });
+                    uploadStream.end(file.buffer);
+                });
                 imageUrls.push(result.secure_url);
             }
             updatedData.images = imageUrls;
@@ -452,7 +445,7 @@ app.post('/api/properties/:propertyId/view', async (req, res) => {
 app.get('/api/dashboard/stats', authenticateToken, async (req, res) => {
     if (req.user.userType !== 'landlord') return res.status(403).json({ message: 'Access denied.' });
     try {
-        const landlordId = req.user.userId;
+        const landlordId = mongoose.Types.ObjectId(req.user.userId);
         const properties = await Property.find({ landlord_id: landlordId }).select('_id title image_url');
         const propertyIds = properties.map(p => p._id);
 
@@ -474,10 +467,11 @@ app.get('/api/dashboard/stats', authenticateToken, async (req, res) => {
 
         res.json({ summary, properties: propertyStats });
     } catch (error) {
+        console.error("Dashboard error:", error);
         res.status(500).json({ message: 'Server error fetching dashboard stats.' });
     }
 });
 
 server.listen(PORT, () => {
-  console.log(`Backend server with WebSocket running on http://localhost:${PORT}`);
+    console.log(`Backend server with WebSocket running on http://localhost:${PORT}`);
 });
