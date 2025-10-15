@@ -62,7 +62,7 @@ const FavoriteSchema = new mongoose.Schema({
 FavoriteSchema.index({ user_id: 1, property_id: 1 }, { unique: true });
 
 const ConversationSchema = new mongoose.Schema({
-    property_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Property', required: true },
+    property_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Property' },
     student_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     landlord_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
 }, { timestamps: true });
@@ -86,7 +86,7 @@ const Conversation = mongoose.model('Conversation', ConversationSchema);
 const Message = mongoose.model('Message', MessageSchema);
 const PropertyView = mongoose.model('PropertyView', PropertyViewSchema);
 
-// --- Middleware & Config (unchanged) ---
+// --- Middleware & Config ---
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
@@ -95,7 +95,14 @@ cloudinary.config({
 });
 const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });
-app.use(cors());
+
+// --- UPDATED CORS CONFIGURATION ---
+const corsOptions = {
+    origin: 'http://localhost:3000', // Allow only your frontend to connect
+    optionsSuccessStatus: 200 
+};
+app.use(cors(corsOptions));
+
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
@@ -184,7 +191,7 @@ wss.on('connection', (ws) => {
 });
 
 
-// --- REST API Routes ---
+// --- REST API Routes (unchanged) ---
 app.post('/api/signup', async (req, res) => {
     const { email, password, userType } = req.body;
     try {
@@ -295,9 +302,6 @@ app.put('/api/properties/:id', authenticateToken, upload.array('images', 5), asy
 });
 
 
-// --- UPDATED DELETE ROUTES WITH FULL CLEANUP ---
-
-// Standard delete for property owners
 app.delete('/api/properties/:id', authenticateToken, async (req, res) => {
     const { id } = req.params;
     try {
@@ -305,19 +309,14 @@ app.delete('/api/properties/:id', authenticateToken, async (req, res) => {
         if (!property || property.landlord_id.toString() !== req.user.userId) {
             return res.status(403).json({ message: 'Unauthorized.' });
         }
-
-        // Find all conversations related to this property
+        
         const conversations = await Conversation.find({ property_id: id });
         const conversationIds = conversations.map(c => c._id);
 
-        // Delete all messages in those conversations
         await Message.deleteMany({ conversation_id: { $in: conversationIds } });
-        // Delete the conversations themselves
         await Conversation.deleteMany({ property_id: id });
-        // Delete reviews and favorites
         await Review.deleteMany({ property_id: id });
         await Favorite.deleteMany({ property_id: id });
-        // Finally, delete the property
         await Property.findByIdAndDelete(id);
 
         res.json({ message: 'Property and all associated data deleted successfully.' });
@@ -327,7 +326,6 @@ app.delete('/api/properties/:id', authenticateToken, async (req, res) => {
 });
 
 
-// Admin delete route
 app.delete('/api/properties/:id/admin-delete', async (req, res) => {
     const { id } = req.params;
     try {
@@ -336,18 +334,13 @@ app.delete('/api/properties/:id/admin-delete', async (req, res) => {
             return res.status(404).json({ message: 'Property not found.' });
         }
         
-        // Find all conversations related to this property
         const conversations = await Conversation.find({ property_id: id });
         const conversationIds = conversations.map(c => c._id);
 
-        // Delete all messages in those conversations
         await Message.deleteMany({ conversation_id: { $in: conversationIds } });
-        // Delete the conversations themselves
         await Conversation.deleteMany({ property_id: id });
-        // Delete reviews and favorites
         await Review.deleteMany({ property_id: id });
         await Favorite.deleteMany({ property_id: id });
-        // Finally, delete the property
         await Property.findByIdAndDelete(id);
         
         console.log(`Admin deleted property ${id} and all associated data.`);
@@ -359,18 +352,23 @@ app.delete('/api/properties/:id/admin-delete', async (req, res) => {
 });
 
 
-// --- Other API Routes (unchanged) ---
 app.get('/api/conversations', authenticateToken, async (req, res) => {
     const userId = req.user.userId;
     try {
         const conversations = await Conversation.find({ $or: [{ student_id: userId }, { landlord_id: userId }] })
-            .populate('property_id', 'title').populate('student_id', 'email').populate('landlord_id', 'email')
+            .populate('property_id', 'title')
+            .populate('student_id', 'email')
+            .populate('landlord_id', 'email')
             .sort({ createdAt: -1 });
-        res.json(conversations);
+
+        const validConversations = conversations.filter(c => c.property_id);
+        
+        res.json(validConversations);
     } catch (error) {
         res.status(500).json({ message: 'Server error fetching conversations.' });
     }
 });
+
 
 app.post('/api/conversations', authenticateToken, async (req, res) => {
     const { property_id, landlord_id } = req.body;
@@ -401,7 +399,7 @@ app.get('/api/conversations/:id/messages', authenticateToken, async (req, res) =
 app.get('/api/favorites', authenticateToken, async (req, res) => {
     try {
         const favorites = await Favorite.find({ user_id: req.user.userId }).populate('property_id');
-        res.json(favorites.map(fav => fav.property_id));
+        res.json(favorites.map(fav => fav.property_id).filter(p => p != null));
     } catch (error) {
         res.status(500).json({ message: 'Server error fetching favorites.' });
     }
