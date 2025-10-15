@@ -9,6 +9,8 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const multer = require('multer');
 const cloudinary = require('cloudinary').v2;
+const nodemailer = require('nodemailer');
+const sgTransport = require('nodemailer-sendgrid-transport');
 const mongoose = require('mongoose');
 const connectDB = require('./db');
 
@@ -21,7 +23,9 @@ const JWT_SECRET = process.env.JWT_SECRET || "super-secret-key-change-this";
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
-// --- Mongoose Schemas (unchanged) ---
+// REMOVED: const otpStore = {};
+
+// --- Mongoose Schemas ---
 const UserSchema = new mongoose.Schema({
     email: { type: String, required: true, unique: true, lowercase: true },
     password: { type: String, required: true },
@@ -39,8 +43,8 @@ const PropertySchema = new mongoose.Schema({
     bedrooms: Number,
     bathrooms: Number,
     amenities: String,
-    image_url: String,
-    images: [String],
+    image_url: String, // Main display image
+    images: [String],  // Gallery images
     floor_plan_url: String,
     virtual_tour_url: String,
     lat: Number,
@@ -77,7 +81,7 @@ const PropertyViewSchema = new mongoose.Schema({
     property_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Property', required: true },
 }, { timestamps: true });
 
-// --- Mongoose Models (unchanged) ---
+// --- Mongoose Models ---
 const User = mongoose.model('User', UserSchema);
 const Property = mongoose.model('Property', PropertySchema);
 const Review = mongoose.model('Review', ReviewSchema);
@@ -86,7 +90,10 @@ const Conversation = mongoose.model('Conversation', ConversationSchema);
 const Message = mongoose.model('Message', MessageSchema);
 const PropertyView = mongoose.model('PropertyView', PropertyViewSchema);
 
-// --- Middleware & Config (unchanged) ---
+// --- Middleware & Config ---
+const options = { auth: { api_key: process.env.SENDGRID_API_KEY } };
+const transporter = nodemailer.createTransport(sgTransport(options));
+
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
@@ -185,6 +192,8 @@ wss.on('connection', (ws) => {
 
 
 // --- REST API Routes ---
+
+// UPDATED /api/signup ROUTE
 app.post('/api/signup', async (req, res) => {
     const { email, password, userType } = req.body;
     try {
@@ -192,26 +201,38 @@ app.post('/api/signup', async (req, res) => {
         if (existingUser) {
             return res.status(409).json({ message: 'Email already registered.' });
         }
+
         const hashedPassword = await bcrypt.hash(password, 10);
+        
         const newUser = new User({
             email,
             password: hashedPassword,
-            user_type: userType,
+            user_type: userType
         });
+        
         await newUser.save();
-        const token = jwt.sign({ userId: newUser._id, email: newUser.email, userType: newUser.user_type }, JWT_SECRET, { expiresIn: '1h' });
+
+        const token = jwt.sign(
+            { userId: newUser._id, email: newUser.email, userType: newUser.user_type },
+            JWT_SECRET,
+            { expiresIn: "1h" }
+        );
+
         res.status(201).json({
             message: 'User registered successfully!',
             token,
             email: newUser.email,
             userId: newUser._id,
-            userType: newUser.user_type,
+            userType: newUser.user_type
         });
+
     } catch (error) {
-        console.error('Error during signup:', error);
+        console.error('Signup Error:', error);
         res.status(500).json({ message: 'Server error during signup.' });
     }
 });
+
+// REMOVED /api/verify-otp ROUTE
 
 app.post("/api/login", async (req, res) => {
     const { email, password } = req.body;
@@ -227,6 +248,7 @@ app.post("/api/login", async (req, res) => {
     }
 });
 
+// --- Other API Routes (unchanged) ---
 
 app.get('/api/properties', async (req, res) => {
     try {
@@ -294,10 +316,6 @@ app.put('/api/properties/:id', authenticateToken, upload.array('images', 5), asy
     }
 });
 
-
-// --- UPDATED DELETE ROUTES WITH FULL CLEANUP ---
-
-// Standard delete for property owners
 app.delete('/api/properties/:id', authenticateToken, async (req, res) => {
     const { id } = req.params;
     try {
@@ -305,61 +323,15 @@ app.delete('/api/properties/:id', authenticateToken, async (req, res) => {
         if (!property || property.landlord_id.toString() !== req.user.userId) {
             return res.status(403).json({ message: 'Unauthorized.' });
         }
-
-        // Find all conversations related to this property
-        const conversations = await Conversation.find({ property_id: id });
-        const conversationIds = conversations.map(c => c._id);
-
-        // Delete all messages in those conversations
-        await Message.deleteMany({ conversation_id: { $in: conversationIds } });
-        // Delete the conversations themselves
-        await Conversation.deleteMany({ property_id: id });
-        // Delete reviews and favorites
+        await Property.findByIdAndDelete(id);
         await Review.deleteMany({ property_id: id });
         await Favorite.deleteMany({ property_id: id });
-        // Finally, delete the property
-        await Property.findByIdAndDelete(id);
-
-        res.json({ message: 'Property and all associated data deleted successfully.' });
+        res.json({ message: 'Property deleted successfully.' });
     } catch (error) {
         res.status(500).json({ message: 'Server error deleting property.' });
     }
 });
 
-
-// Admin delete route
-app.delete('/api/properties/:id/admin-delete', async (req, res) => {
-    const { id } = req.params;
-    try {
-        const property = await Property.findById(id);
-        if (!property) {
-            return res.status(404).json({ message: 'Property not found.' });
-        }
-        
-        // Find all conversations related to this property
-        const conversations = await Conversation.find({ property_id: id });
-        const conversationIds = conversations.map(c => c._id);
-
-        // Delete all messages in those conversations
-        await Message.deleteMany({ conversation_id: { $in: conversationIds } });
-        // Delete the conversations themselves
-        await Conversation.deleteMany({ property_id: id });
-        // Delete reviews and favorites
-        await Review.deleteMany({ property_id: id });
-        await Favorite.deleteMany({ property_id: id });
-        // Finally, delete the property
-        await Property.findByIdAndDelete(id);
-        
-        console.log(`Admin deleted property ${id} and all associated data.`);
-        res.json({ message: 'Property and all associated data deleted successfully by admin.' });
-    } catch (error) {
-        console.error(`Admin delete error for property ${id}:`, error);
-        res.status(500).json({ message: 'Server error during admin deletion.' });
-    }
-});
-
-
-// --- Other API Routes (unchanged) ---
 app.get('/api/conversations', authenticateToken, async (req, res) => {
     const userId = req.user.userId;
     try {
@@ -487,7 +459,7 @@ app.get('/api/dashboard/stats', authenticateToken, async (req, res) => {
     }
 });
 
+
 server.listen(PORT, () => {
   console.log(`Backend server with WebSocket running on http://localhost:${PORT}`);
 });
-
